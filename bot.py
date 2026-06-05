@@ -10,6 +10,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 
 from ec_rules import ECRules
 from parking_search import ParkingSearch
+from database_setup import setup_database
 
 # Enable logging
 logging.basicConfig(
@@ -30,6 +31,9 @@ if not TOKEN:
 
 # Database
 DATABASE_NAME = "truckhelper.db"
+
+# Initialize database tables on startup
+setup_database()
 
 
 def get_db_connection():
