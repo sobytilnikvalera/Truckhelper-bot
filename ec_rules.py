@@ -386,6 +386,10 @@ class ECRules:
             return "Смена активна."
         return "Нет данных (начните первую смену)."
 
+    def get_current_driving_session_start_time(self):
+        """Returns the start time of the current driving session if active, otherwise None."""
+        return self.current_driving_start_time
+
     def _get_weekly_rest_info(self):
         """Info about weekly rest allowances."""
         reduced_remaining = self.MAX_REDUCED_REST_PER_WEEK - self.reduced_rest_count

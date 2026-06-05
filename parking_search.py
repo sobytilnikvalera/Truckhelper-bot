@@ -1,31 +1,69 @@
 
 import requests
+import math
 
 class ParkingSearch:
     def __init__(self, api_key=None):
         self.api_key = api_key
-        # For OpenStreetMap/Overpass API, no API key is strictly required for basic queries
         self.overpass_url = "http://overpass-api.de/api/interpreter"
 
-    def search_truck_parking_osm(self, latitude, longitude, radius=5000, paid=None):
-        # Overpass API query to find truck parking
-        # More info on Overpass queries: https://wiki.openstreetmap.org/wiki/Overpass_API/Language_Guide
-        # Example for truck parking: https://taginfo.openstreetmap.org/keys/truck_parking
+    def _calculate_distance(self, lat1, lon1, lat2, lon2):
+        R = 6371  # Radius of Earth in kilometers
 
+        lat1_rad = math.radians(lat1)
+        lon1_rad = math.radians(lon1)
+        lat2_rad = math.radians(lat2)
+        lon2_rad = math.radians(lon2)
+
+        dlon = lon2_rad - lon1_rad
+        dlat = lat2_rad - lat1_rad
+
+        a = math.sin(dlat / 2)**2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon / 2)**2
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+        distance = R * c
+        return distance
+
+    def search_truck_parking_osm(self, latitude, longitude, radius=25000):
+        # Expanded Overpass API query to find various types of truck parking
+        # Radius increased to 25km as requested
         query = f"""
         [out:json];
-        (node["amenity"="parking"]["hgv"="yes"](around:{radius},{latitude},{longitude});
-         way["amenity"="parking"]["hgv"="yes"](around:{radius},{latitude},{longitude});
-         relation["amenity"="parking"]["hgv"="yes"](around:{radius},{latitude},{longitude});
+        (
+          node["hgv"="yes"]["amenity"="parking"](around:{radius},{latitude},{longitude});
+          way["hgv"="yes"]["amenity"="parking"](around:{radius},{latitude},{longitude});
+          relation["hgv"="yes"]["amenity"="parking"](around:{radius},{latitude},{longitude});
+
+          node["amenity"="parking"]["capacity:hgv"](around:{radius},{latitude},{longitude});
+          way["amenity"="parking"]["capacity:hgv"](around:{radius},{latitude},{longitude});
+          relation["amenity"="parking"]["capacity:hgv"](around:{radius},{latitude},{longitude});
+
+          node["amenity"="parking"]["parking"="truck"](around:{radius},{latitude},{longitude});
+          way["amenity"="parking"]["parking"="truck"](around:{radius},{latitude},{longitude});
+          relation["amenity"="parking"]["parking"="truck"](around:{radius},{latitude},{longitude});
+
+          node["highway"="rest_area"](around:{radius},{latitude},{longitude});
+          way["highway"="rest_area"](around:{radius},{latitude},{longitude});
+          relation["highway"="rest_area"](around:{radius},{latitude},{longitude});
+
+          node["highway"="services"](around:{radius},{latitude},{longitude});
+          way["highway"="services"](around:{radius},{latitude},{longitude});
+          relation["highway"="services"](around:{radius},{latitude},{longitude});
+
+          node["tourism"="caravan_site"](around:{radius},{latitude},{longitude});
+          way["tourism"="caravan_site"](around:{radius},{latitude},{longitude});
+          relation["tourism"="caravan_site"](around:{radius},{latitude},{longitude});
+
+          node["amenity"="fuel"]["hgv"="yes"](around:{radius},{latitude},{longitude});
+          way["amenity"="fuel"]["hgv"="yes"](around:{radius},{latitude},{longitude});
+          relation["amenity"="fuel"]["hgv"="yes"](around:{radius},{latitude},{longitude});
+
+          node["landuse"="commercial"]["parking"](around:{radius},{latitude},{longitude});
+          way["landuse"="commercial"]["parking"](around:{radius},{latitude},{longitude});
+          relation["landuse"="commercial"]["parking"](around:{radius},{latitude},{longitude});
         );
         out center;
         """
-
-        if paid is not None:
-            # This part would need more sophisticated tagging in OSM for 'paid' status
-            # For simplicity, we'll just use the basic hgv=yes tag for now.
-            # A more advanced query might look for 'fee=yes' or 'fee=no' if available.
-            pass
 
         try:
             response = requests.post(self.overpass_url, data=query)
@@ -36,48 +74,59 @@ class ParkingSearch:
                 if element.get("type") in ["node", "way", "relation"]:
                     lat = element.get("lat", element.get("center", {}).get("lat"))
                     lon = element.get("lon", element.get("center", {}).get("lon"))
-                    name = element.get("tags", {}).get("name", "Unnamed Parking")
+                    
+                    if lat is None or lon is None:
+                        continue
+
+                    name = element.get("tags", {}).get("name", "Без названия")
+                    distance = self._calculate_distance(latitude, longitude, lat, lon)
+                    
+                    # Extract amenities
+                    tags = element.get("tags", {})
+                    amenities = {
+                        "shower": tags.get("hgv:shower", tags.get("shower", "no")) == "yes",
+                        "wc": tags.get("hgv:toilets", tags.get("toilets", "no")) == "yes",
+                        "fuel": tags.get("fuel", "no") == "yes" or tags.get("amenity", "") == "fuel",
+                        "restaurant": tags.get("restaurant", "no") == "yes" or tags.get("diner", "no") == "yes"
+                    }
+
                     parkings.append({
                         "name": name,
                         "latitude": lat,
                         "longitude": lon,
-                        "type": element.get("type"),
-                        "tags": element.get("tags", {})
+                        "distance": distance,
+                        "amenities": amenities,
+                        "tags": tags # Keep original tags for debugging/future use
                     })
+            
+            # Sort by distance
+            parkings.sort(key=lambda p: p["distance"])
             return parkings
         except requests.exceptions.RequestException as e:
             print(f"Error during Overpass API request: {e}")
             return []
 
-    def search_truck_parking_google_maps(self, latitude, longitude, radius=5000, paid=None):
-        if not self.api_key:
-            return "Google Maps API key not provided."
-        # This would require Google Places API or similar
-        # Example URL (simplified, needs proper authentication and parameters):
-        # https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=-33.8670522,151.1957362&radius=1500&type=parking&keyword=truck%20parking&key=YOUR_API_KEY
-        return "Google Maps parking search not implemented yet. Using OpenStreetMap."
-
-    def search_parking(self, latitude, longitude, radius=5000, paid=None, use_google_maps=False):
-        if use_google_maps:
-            return self.search_truck_parking_google_maps(latitude, longitude, radius, paid)
-        else:
-            return self.search_truck_parking_osm(latitude, longitude, radius, paid)
+    def search_parking(self, latitude, longitude, radius=25000):
+        # For now, only OSM search is implemented and enhanced.
+        return self.search_truck_parking_osm(latitude, longitude, radius)
 
 if __name__ == '__main__':
-    # Example usage
     parking_finder = ParkingSearch()
     # Coordinates for a location in Europe (e.g., Berlin)
     lat = 52.5200
     lon = 13.4050
     print(f"Searching for truck parking near {lat}, {lon} using OpenStreetMap...")
-    parkings = parking_finder.search_parking(lat, lon, radius=10000) # 10 km radius
+    parkings = parking_finder.search_parking(lat, lon, radius=25000) # 25 km radius
     if parkings:
-        for parking in parkings:
-            print(f"- Name: {parking['name']}, Lat: {parking['latitude']}, Lon: {parking['longitude']}")
+        for i, parking in enumerate(parkings[:10]): # Show top 10
+            amenities_str = []
+            if parking["amenities"]["shower"]: amenities_str.append("Душ")
+            if parking["amenities"]["wc"]: amenities_str.append("Туалет")
+            if parking["amenities"]["fuel"]: amenities_str.append("Топливо")
+            if parking["amenities"]["restaurant"]: amenities_str.append("Ресторан")
+            amenities_display = f" ({', '.join(amenities_str)})" if amenities_str else ""
+
+            print(f"{i+1}. {parking['name']} ({parking['distance']:.2f} км){amenities_display}")
+            print(f"   📍 https://www.google.com/maps/search/?api=1&query={parking['latitude']},{parking['longitude']}")
     else:
         print("No truck parking found.")
-
-    # Example with Google Maps (will return not implemented message)
-    parking_finder_google = ParkingSearch(api_key="YOUR_GOOGLE_MAPS_API_KEY")
-    print("\nSearching for truck parking using Google Maps...")
-    print(parking_finder_google.search_parking(lat, lon, use_google_maps=True))
