@@ -3,7 +3,8 @@ import os
 import sqlite3
 import re
 import random
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -30,6 +31,9 @@ ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
 if not TOKEN:
     raise ValueError("BOT_TOKEN environment variable is not set! Add it in Railway settings.")
 
+# Timezone (Central European Time)
+TZ = ZoneInfo(os.environ.get("BOT_TIMEZONE", "Europe/Berlin"))
+
 # Database
 DATABASE_NAME = "truckhelper.db"
 
@@ -49,7 +53,7 @@ async def get_or_create_user(user):
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM users WHERE user_id = ?", (user.id,))
     existing = cursor.fetchone()
-    now = datetime.now().isoformat()
+    now = datetime.now(TZ).isoformat()
 
     if not existing:
         cursor.execute(
@@ -189,11 +193,11 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     total_users = cursor.fetchone()["total"]
 
     cursor.execute("SELECT COUNT(*) as active FROM users WHERE last_active >= ?",
-                   ((datetime.now() - timedelta(days=7)).isoformat(),))
+                   ((datetime.now(TZ) - timedelta(days=7)).isoformat(),))
     active_7d = cursor.fetchone()["active"]
 
     cursor.execute("SELECT COUNT(*) as active FROM users WHERE last_active >= ?",
-                   ((datetime.now() - timedelta(days=1)).isoformat(),))
+                   ((datetime.now(TZ) - timedelta(days=1)).isoformat(),))
     active_24h = cursor.fetchone()["active"]
 
     cursor.execute("SELECT user_id, telegram_username, first_name, last_name, registration_date, last_active FROM users ORDER BY registration_date DESC LIMIT 10")
@@ -398,7 +402,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 # Re-load state
                 ec_rules_fresh = ECRules(user_id)
                 shift_start = ec_rules_fresh.current_shift_start_time
-                shift_duration = datetime.now() - shift_start if shift_start else timedelta(0)
+                shift_duration = datetime.now(TZ) - shift_start if shift_start else timedelta(0)
 
                 text = f"✅ Вождение завершено!\n\n"
                 text += f"{response}\n\n"
@@ -486,7 +490,11 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def _show_active_shift_menu(query, ec_rules):
     """Show the active shift screen with current state."""
     shift_start = ec_rules.current_shift_start_time
-    shift_duration = datetime.now() - shift_start if shift_start else timedelta(0)
+    now = datetime.now(TZ)
+    # Make shift_start timezone-aware if it isn't
+    if shift_start and shift_start.tzinfo is None:
+        shift_start = shift_start.replace(tzinfo=TZ)
+    shift_duration = now - shift_start if shift_start else timedelta(0)
     start_time_str = shift_start.strftime('%H:%M') if shift_start else "?"
 
     if ec_rules.current_driving_start_time:
@@ -498,8 +506,8 @@ async def _show_active_shift_menu(query, ec_rules):
 
         text = f"🟢 Смена открыта\n"
         text += f"━━━━━━━━━━━━━━━\n"
-        text += f"🕐 Начало: {start_time_str}\n"
-        text += f"⏱ Длительность: {format_seconds(int(shift_duration.total_seconds()))}\n"
+        text += f"📅 Открытие смены: {start_time_str}\n"
+        text += f"⏱ Смена идёт: {format_seconds(int(shift_duration.total_seconds()))}\n"
         text += f"🚗 Вождение сегодня: {format_minutes(daily_driving)}\n"
         text += f"━━━━━━━━━━━━━━━\n"
 
@@ -514,12 +522,17 @@ async def _show_active_shift_menu(query, ec_rules):
 
 async def _show_driving_active(query, ec_rules):
     """Show the active driving screen."""
+    now = datetime.now(TZ)
     driving_start = ec_rules.current_driving_start_time
-    driving_duration = datetime.now() - driving_start if driving_start else timedelta(0)
+    if driving_start and driving_start.tzinfo is None:
+        driving_start = driving_start.replace(tzinfo=TZ)
+    driving_duration = now - driving_start if driving_start else timedelta(0)
     driving_start_str = driving_start.strftime('%H:%M') if driving_start else "?"
 
     shift_start = ec_rules.current_shift_start_time
-    shift_duration = datetime.now() - shift_start if shift_start else timedelta(0)
+    if shift_start and shift_start.tzinfo is None:
+        shift_start = shift_start.replace(tzinfo=TZ)
+    shift_duration = now - shift_start if shift_start else timedelta(0)
 
     # Calculate remaining continuous driving
     max_continuous = 4.5 * 3600  # 4h30m in seconds
@@ -557,7 +570,9 @@ def _schedule_driving_reminders(context, user_id, ec_rules):
     if not driving_start:
         return
 
-    now = datetime.now()
+    now = datetime.now(TZ)
+    if driving_start and driving_start.tzinfo is None:
+        driving_start = driving_start.replace(tzinfo=TZ)
     elapsed = (now - driving_start).total_seconds()
     max_driving = 4.5 * 3600  # 4h30m
 

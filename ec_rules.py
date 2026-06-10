@@ -1,5 +1,14 @@
 import datetime
+import os
 import sqlite3
+from zoneinfo import ZoneInfo
+
+# Timezone
+_TZ = ZoneInfo(os.environ.get("BOT_TIMEZONE", "Europe/Berlin"))
+
+
+def _now():
+    return datetime.datetime.now(_TZ)
 
 
 class ECRules:
@@ -29,6 +38,14 @@ class ECRules:
         conn.row_factory = sqlite3.Row
         return conn
 
+    @staticmethod
+    def _parse_dt(dt_str):
+        """Parse datetime string and ensure it has timezone info."""
+        dt = datetime.datetime.fromisoformat(dt_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_TZ)
+        return dt
+
     def _get_week_start(self):
         today = datetime.date.today()
         return (today - datetime.timedelta(days=today.weekday())).isoformat()
@@ -44,10 +61,10 @@ class ECRules:
         active_session = cursor.fetchone()
         if active_session:
             if active_session["session_type"] == "driving":
-                self.current_driving_start_time = datetime.datetime.fromisoformat(active_session["start_time"])
+                self.current_driving_start_time = self._parse_dt(active_session["start_time"])
                 self.current_shift_start_time = self._get_last_shift_start_time(conn)
             elif active_session["session_type"] == "shift":
-                self.current_shift_start_time = datetime.datetime.fromisoformat(active_session["start_time"])
+                self.current_shift_start_time = self._parse_dt(active_session["start_time"])
                 self.current_driving_start_time = None
         else:
             self.current_shift_start_time = None
@@ -100,7 +117,7 @@ class ECRules:
             (self.user_id,))
         result = cursor.fetchone()
         if result:
-            return datetime.datetime.fromisoformat(result["start_time"])
+            return self._parse_dt(result["start_time"])
         return None
 
     def _update_driving_stats(self, duration_minutes):
@@ -123,7 +140,7 @@ class ECRules:
     def start_shift(self):
         if self.current_shift_start_time:
             return "⚠️ Смена уже активна."
-        self.current_shift_start_time = datetime.datetime.now()
+        self.current_shift_start_time = _now()
         conn = self._get_db_connection()
         cursor = conn.cursor()
         cursor.execute("INSERT INTO driving_sessions (user_id, start_time, session_type) VALUES (?, ?, ?)",
@@ -146,7 +163,7 @@ class ECRules:
         last_shift_end = cursor.fetchone()
 
         if last_shift_end:
-            rest_start = datetime.datetime.fromisoformat(last_shift_end["end_time"])
+            rest_start = self._parse_dt(last_shift_end["end_time"])
             rest_end = self.current_shift_start_time
             rest_duration = rest_end - rest_start
             rest_minutes = int(rest_duration.total_seconds() / 60)
@@ -178,7 +195,7 @@ class ECRules:
         if self.current_driving_start_time:
             return "⚠️ Нельзя завершить смену во время вождения. Сначала завершите вождение."
 
-        shift_end_time = datetime.datetime.now()
+        shift_end_time = _now()
         shift_duration = shift_end_time - self.current_shift_start_time
 
         conn = self._get_db_connection()
@@ -201,8 +218,8 @@ class ECRules:
         # Check for required break after continuous driving
         last_driving_session = self._get_last_completed_driving_session()
         if last_driving_session:
-            last_driving_end = datetime.datetime.fromisoformat(last_driving_session["end_time"])
-            time_since_last_driving = datetime.datetime.now() - last_driving_end
+            last_driving_end = self._parse_dt(last_driving_session["end_time"])
+            time_since_last_driving = _now() - last_driving_end
             if (last_driving_session["duration"] and
                     last_driving_session["duration"] >= self.MAX_CONTINUOUS_DRIVING.total_seconds() / 60 and
                     time_since_last_driving < self.MIN_BREAK_AFTER_CONTINUOUS):
@@ -227,7 +244,7 @@ class ECRules:
         if self.bi_weekly_driving_minutes >= self.MAX_BI_WEEKLY_DRIVING.total_seconds() / 60:
             return "🛑 Достигнут лимит вождения за две недели (90 часов)."
 
-        self.current_driving_start_time = datetime.datetime.now()
+        self.current_driving_start_time = _now()
         conn = self._get_db_connection()
         cursor = conn.cursor()
         cursor.execute("INSERT INTO driving_sessions (user_id, start_time, session_type) VALUES (?, ?, ?)",
@@ -240,7 +257,7 @@ class ECRules:
         if not self.current_driving_start_time:
             return "⚠️ Нет активного вождения для завершения."
 
-        driving_end_time = datetime.datetime.now()
+        driving_end_time = _now()
         driving_duration = driving_end_time - self.current_driving_start_time
         duration_minutes = int(driving_duration.total_seconds() / 60)
 
@@ -313,7 +330,7 @@ class ECRules:
 
     def _get_remaining_continuous_driving(self):
         if self.current_driving_start_time:
-            continuous_driving = datetime.datetime.now() - self.current_driving_start_time
+            continuous_driving = _now() - self.current_driving_start_time
             remaining = self.MAX_CONTINUOUS_DRIVING - continuous_driving
             if remaining.total_seconds() < 0:
                 return "🛑 Превышено! Требуется пауза 45 минут!"
@@ -323,8 +340,8 @@ class ECRules:
     def _get_required_break_time(self):
         last_driving_session = self._get_last_completed_driving_session()
         if last_driving_session:
-            last_driving_end = datetime.datetime.fromisoformat(last_driving_session["end_time"])
-            time_since_last_driving = datetime.datetime.now() - last_driving_end
+            last_driving_end = self._parse_dt(last_driving_session["end_time"])
+            time_since_last_driving = _now() - last_driving_end
             if (last_driving_session["duration"] and
                     last_driving_session["duration"] >= self.MAX_CONTINUOUS_DRIVING.total_seconds() / 60 and
                     time_since_last_driving < self.MIN_BREAK_AFTER_CONTINUOUS):
@@ -364,8 +381,8 @@ class ECRules:
         conn.close()
 
         if last_shift_end and not self.current_shift_start_time:
-            last_shift_end_time = datetime.datetime.fromisoformat(last_shift_end["end_time"])
-            time_since_last_shift = datetime.datetime.now() - last_shift_end_time
+            last_shift_end_time = self._parse_dt(last_shift_end["end_time"])
+            time_since_last_shift = _now() - last_shift_end_time
 
             if time_since_last_shift >= self.MIN_DAILY_REST_NORMAL:
                 return f"✅ Полный отдых выполнен ({self._format_timedelta(time_since_last_shift)})."
