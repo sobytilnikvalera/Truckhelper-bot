@@ -111,22 +111,42 @@ REMINDER_30MIN = [
 ]
 
 REMINDER_15MIN = [
-    "🔴 15 минут! Серьёзно, ищи где встать!",
-    "⚡ Осталось 15 мин! Если не видишь парковку — паникуй (шутка, но ищи)!",
-    "🅿️ 15 минут до перерыва! Давай, найди местечко!",
+    "🔴 15 минут, бля! Серьёзно, ищи где встать!",
+    "⚡ 15 мин осталось! Хули ты едешь?! Ищи парковку!",
+    "🅿️ 15 минут! Не тупи, ищи место пока не поздно!",
 ]
 
 REMINDER_10MIN = [
-    "🚨 10 МИНУТ! Ты что, решил рекорд поставить?! Тормози уже!",
-    "😤 10 минут осталось! Хватит гнать, пора на паузу!",
-    "⛔ 10 мин! Тахограф не обманешь, братан! Вставай!",
+    "🚨 10 МИНУТ, ЁБАНЫЙ НАСОС! Ты рекорд решил поставить?! ТОРМОЗИ!",
+    "😤 10 минут! Ты охуел что ли?! Хватит гнать, вставай!",
+    "⛔ 10 мин! Тахограф тебя выебет, братан! ВСТАВАЙ!",
 ]
 
 REMINDER_5MIN = [
-    "🤬 5 МИНУТ, БЛЯТЬ! ТОРМОЗИ НЕМЕДЛЕННО! Штраф хочешь?!",
-    "💀 5 минут! Ё-моё, ты что творишь?! СТОЙ СЕЙЧАС ЖЕ!",
-    "🔥 ПЯТЬ МИНУТ! Ты ебанулся?! Вставай на паузу СРОЧНО!",
-    "☠️ 5 МИН! Если не остановишься — тахограф тебя сдаст! ТОРМОЗИ!",
+    "🤬 5 МИНУТ, БЛЯТЬ! ТОРМОЗИ НАХУЙ! Штраф хочешь?!",
+    "💀 Ё-МОЁ, 5 МИНУТ! Ты ебанулся?! СТОЙ СЕЙЧАС ЖЕ!",
+    "🔥 ПЯТЬ МИНУТ! Пиздец тебе если не встанешь! ТОРМОЗИ!",
+    "☠️ 5 МИН! Тахограф тебя сдаст нахуй! ВСТАВАЙ НЕМЕДЛЕННО!",
+]
+
+REMINDER_4MIN = [
+    "🚨 4 МИНУТЫ! Ты ещё едешь?! Совсем ёбнулся?!",
+    "⚠️ 4 МИН! Братан, ты в край охуел! ТОРМОЗИ!",
+]
+
+REMINDER_3MIN = [
+    "💀 3 МИНУТЫ! ПИЗДЕЦ ПОДКРАЛСЯ! ВСТАВАЙ БЛЯТЬ!",
+    "🔥 ТРИ МИНУТЫ! Ты что, суицидник?! ТОРМОЗИ НАХУЙ!",
+]
+
+REMINDER_2MIN = [
+    "☠️ 2 МИНУТЫ!!! ТЕБЕ ПИЗДА! ТОРМОЗИ СУКА ТОРМОЗИ!",
+    "🤯 ДВЕ МИНУТЫ! ТЫ МЁРТВ ЕСЛИ НЕ ВСТАНЕШЬ! СТОООЙ!",
+]
+
+REMINDER_1MIN = [
+    "🆘 ОДНА МИНУТА!!! БЛЯТЬ СТОЙ!!! ШТРАФ 3000€!!! ТОРМОЗИИИИ!!!",
+    "💀💀💀 МИНУТА! ПИЗДЕЦ ПРИЕХАЛ! ВСТАВАЙ ИЛИ ПРОЩАЙСЯ С ПРАВАМИ!!!",
 ]
 
 
@@ -610,6 +630,42 @@ def _schedule_driving_reminders(context, user_id, ec_rules):
             driving_reminder, time_to_5,
             chat_id=user_id, name=str(user_id),
             data=random.choice(REMINDER_5MIN)
+        )
+
+    # 4 min before
+    time_to_4 = max_driving - 4 * 60 - elapsed
+    if time_to_4 > 0:
+        context.job_queue.run_once(
+            driving_reminder, time_to_4,
+            chat_id=user_id, name=str(user_id),
+            data=random.choice(REMINDER_4MIN)
+        )
+
+    # 3 min before
+    time_to_3 = max_driving - 3 * 60 - elapsed
+    if time_to_3 > 0:
+        context.job_queue.run_once(
+            driving_reminder, time_to_3,
+            chat_id=user_id, name=str(user_id),
+            data=random.choice(REMINDER_3MIN)
+        )
+
+    # 2 min before
+    time_to_2 = max_driving - 2 * 60 - elapsed
+    if time_to_2 > 0:
+        context.job_queue.run_once(
+            driving_reminder, time_to_2,
+            chat_id=user_id, name=str(user_id),
+            data=random.choice(REMINDER_2MIN)
+        )
+
+    # 1 min before
+    time_to_1 = max_driving - 1 * 60 - elapsed
+    if time_to_1 > 0:
+        context.job_queue.run_once(
+            driving_reminder, time_to_1,
+            chat_id=user_id, name=str(user_id),
+            data=random.choice(REMINDER_1MIN)
         )
 
     logger.info(f"Scheduled driving reminders for user {user_id}")
