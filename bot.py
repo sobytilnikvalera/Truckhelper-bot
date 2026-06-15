@@ -516,6 +516,15 @@ async def _show_active_shift_menu(query, ec_rules):
         shift_start = shift_start.replace(tzinfo=TZ)
     shift_duration = now - shift_start if shift_start else timedelta(0)
     start_time_str = shift_start.strftime('%H:%M') if shift_start else "?"
+    shift_hours = shift_duration.total_seconds() / 3600
+
+    # Shift window limits (EC 561/2006)
+    # Normal: 13h max shift window (24h - 11h rest)
+    # Reduced rest (3x/week): 15h max shift window (24h - 9h rest)
+    MAX_SHIFT_NORMAL = 13  # hours
+    MAX_SHIFT_REDUCED = 15  # hours
+    reduced_rest_used = ec_rules.reduced_rest_count if hasattr(ec_rules, 'reduced_rest_count') else 0
+    can_use_extended = reduced_rest_used < 3
 
     if ec_rules.current_driving_start_time:
         # Currently driving - show driving screen
@@ -524,12 +533,34 @@ async def _show_active_shift_menu(query, ec_rules):
         # Shift active but not driving
         daily_driving = ec_rules.daily_driving_minutes
 
-        text = f"🟢 Смена открыта\n"
+        # Determine shift status
+        if shift_hours >= MAX_SHIFT_REDUCED:
+            shift_status = "🛑 СМЕНА ПРОСРОЧЕНА!"
+            shift_warning = f"\n⚠️ Смена идёт {format_seconds(int(shift_duration.total_seconds()))} — это больше максимума (15ч)!\nЗАКРОЙ СМЕНУ НЕМЕДЛЕННО!\n"
+        elif shift_hours >= MAX_SHIFT_NORMAL:
+            if can_use_extended:
+                remaining_ext = MAX_SHIFT_REDUCED - shift_hours
+                shift_status = "🟡 Смена продлена"
+                shift_warning = f"\n⚠️ 13ч превышено! Работаешь по сокращённому отдыху (9ч).\n⏳ Осталось до лимита: {format_seconds(int(remaining_ext * 3600))}\n📊 Сокращённый отдых использован: {reduced_rest_used}/3 за неделю\n"
+            else:
+                shift_status = "🛑 СМЕНА ПРОСРОЧЕНА!"
+                shift_warning = f"\n⚠️ Смена превысила 13ч! Сокращённый отдых уже использован 3/3 раза.\nЗАКРОЙ СМЕНУ НЕМЕДЛЕННО!\n"
+        elif shift_hours >= MAX_SHIFT_NORMAL - 1:  # Less than 1h to limit
+            remaining_norm = MAX_SHIFT_NORMAL - shift_hours
+            shift_status = "🟢 Смена открыта"
+            shift_warning = f"\n⏳ До лимита смены (13ч): {format_seconds(int(remaining_norm * 3600))}\n"
+        else:
+            remaining_norm = MAX_SHIFT_NORMAL - shift_hours
+            shift_status = "🟢 Смена открыта"
+            shift_warning = f"\n⏳ До лимита смены (13ч): {format_seconds(int(remaining_norm * 3600))}\n"
+
+        text = f"{shift_status}\n"
         text += f"━━━━━━━━━━━━━━━\n"
         text += f"📅 Открытие смены: {start_time_str}\n"
         text += f"⏱ Смена идёт: {format_seconds(int(shift_duration.total_seconds()))}\n"
-        text += f"🚗 Вождение сегодня: {format_minutes(daily_driving)}\n"
+        text += shift_warning
         text += f"━━━━━━━━━━━━━━━\n"
+        text += f"🚗 Вождение сегодня: {format_minutes(daily_driving)}\n"
 
         keyboard = [
             [InlineKeyboardButton("🚗 Начать вождение", callback_data="start_driving")],
@@ -559,6 +590,20 @@ async def _show_driving_active(query, ec_rules):
     remaining_seconds = max_continuous - driving_duration.total_seconds()
     remaining_str = format_seconds(max(0, int(remaining_seconds)))
 
+    # Shift window check
+    shift_hours = shift_duration.total_seconds() / 3600
+    MAX_SHIFT_NORMAL = 13
+    MAX_SHIFT_REDUCED = 15
+    remaining_shift = MAX_SHIFT_NORMAL - shift_hours
+    shift_limit_str = ""
+    if shift_hours >= MAX_SHIFT_REDUCED:
+        shift_limit_str = "🛑 СМЕНА ПРОСРОЧЕНА! ЗАКРЫВАЙ!\n"
+    elif shift_hours >= MAX_SHIFT_NORMAL:
+        remaining_ext = MAX_SHIFT_REDUCED - shift_hours
+        shift_limit_str = f"⚠️ Смена >13ч! До 15ч: {format_seconds(int(remaining_ext * 3600))}\n"
+    elif remaining_shift <= 1:
+        shift_limit_str = f"⏳ До лимита смены: {format_seconds(int(remaining_shift * 3600))}\n"
+
     text = f"🚗 ЗА РУЛЁМ\n"
     text += f"━━━━━━━━━━━━━━━\n"
     text += f"🕐 Начало вождения: {driving_start_str}\n"
@@ -566,6 +611,8 @@ async def _show_driving_active(query, ec_rules):
     text += f"⏳ До перерыва: {remaining_str}\n"
     text += f"━━━━━━━━━━━━━━━\n"
     text += f"🚛 Смена идёт: {format_seconds(int(shift_duration.total_seconds()))}\n"
+    if shift_limit_str:
+        text += shift_limit_str
     text += f"━━━━━━━━━━━━━━━\n"
 
     if remaining_seconds <= 0:
