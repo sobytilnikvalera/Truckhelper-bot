@@ -411,11 +411,11 @@ def _build_journal_text(user_id):
             else:
                 line = f"{day_name} {day_display}:"
                 if shift_min > 0:
-                    line += f" 🚛{format_minutes(shift_min)}"
+                    line += f" ⏰{format_minutes(shift_min)}"
                 if driving_min > 0:
-                    line += f" 🚗{format_minutes(driving_min)}"
+                    line += f" 🎯{format_minutes(driving_min)}"
                 if rest_min > 0:
-                    line += f" 😴{format_minutes(rest_min)}"
+                    line += f" 🛏{format_minutes(rest_min)}"
                 line += extended_mark
                 text += line + "\n"
 
