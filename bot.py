@@ -327,6 +327,125 @@ def _build_status_text(ec_rules):
     return text
 
 
+# --- Journal (2-week history) ---
+
+DAY_NAMES_RU = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+
+
+def _build_journal_text(user_id):
+    """Build a 2-week journal showing daily shift/driving/rest data."""
+    from datetime import date
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    today = date.today()
+    # Start from Monday of previous week (14 days of history)
+    # Find Monday of current week
+    current_monday = today - timedelta(days=today.weekday())
+    prev_monday = current_monday - timedelta(days=7)
+
+    text = "📓 <b>Журнал за 2 недели</b>\n\n"
+
+    week1_driving_total = 0
+    week2_driving_total = 0
+
+    for week_num, week_start in enumerate([prev_monday, current_monday], 1):
+        week_end = week_start + timedelta(days=6)
+        text += f"<b>Неделя {week_num}: {week_start.strftime('%d.%m')} — {week_end.strftime('%d.%m')}</b>\n"
+        text += "─────────────────────\n"
+
+        week_driving = 0
+        has_extended = False
+
+        for day_offset in range(7):
+            day = week_start + timedelta(days=day_offset)
+            day_str = day.isoformat()
+            day_name = DAY_NAMES_RU[day.weekday()]
+            day_display = day.strftime('%d.%m')
+
+            # Get driving minutes for this day
+            cursor.execute(
+                "SELECT daily_driving_minutes FROM daily_stats WHERE user_id = ? AND date = ?",
+                (user_id, day_str))
+            daily_stat = cursor.fetchone()
+            driving_min = daily_stat["daily_driving_minutes"] if daily_stat else 0
+
+            # Get shift sessions for this day
+            cursor.execute(
+                "SELECT start_time, end_time, duration FROM driving_sessions "
+                "WHERE user_id = ? AND session_type = 'shift' AND date(start_time) = ?",
+                (user_id, day_str))
+            shifts = cursor.fetchall()
+            shift_min = 0
+            for s in shifts:
+                if s["duration"]:
+                    shift_min += s["duration"]
+                elif s["start_time"] and not s["end_time"]:
+                    # Active shift - calculate from start to now
+                    from datetime import datetime as dt
+                    start = dt.fromisoformat(s["start_time"])
+                    shift_min += int((datetime.now(TZ) - start.replace(tzinfo=TZ)).total_seconds() / 60)
+
+            # Get rest sessions for this day
+            cursor.execute(
+                "SELECT duration_minutes, rest_type FROM rest_sessions "
+                "WHERE user_id = ? AND date(start_time) = ?",
+                (user_id, day_str))
+            rests = cursor.fetchall()
+            rest_min = sum(r["duration_minutes"] for r in rests if r["duration_minutes"])
+
+            # Check if 10th hour was used
+            extended_mark = ""
+            if driving_min > 9 * 60:
+                extended_mark = " ⚡10ч"
+                has_extended = True
+
+            week_driving += driving_min
+
+            # Only show days that have data or are today/past
+            if day > today:
+                continue
+
+            if driving_min == 0 and shift_min == 0 and rest_min == 0:
+                text += f"{day_name} {day_display}: —\n"
+            else:
+                line = f"{day_name} {day_display}:"
+                if shift_min > 0:
+                    line += f" 🚛{format_minutes(shift_min)}"
+                if driving_min > 0:
+                    line += f" 🚗{format_minutes(driving_min)}"
+                if rest_min > 0:
+                    line += f" 😴{format_minutes(rest_min)}"
+                line += extended_mark
+                text += line + "\n"
+
+        # Weekly summary
+        if week_num == 1:
+            week1_driving_total = week_driving
+        else:
+            week2_driving_total = week_driving
+
+        text += "─────────────────────\n"
+        text += f"📊 Итого вождение: <b>{format_minutes(week_driving)}</b> / 56ч"
+        if has_extended:
+            text += " (⚡ были 10ч дни)"
+        text += "\n\n"
+
+    # Bi-weekly total
+    total_driving = week1_driving_total + week2_driving_total
+    text += "━━━━━━━━━━━━━━━\n"
+    text += f"📊 <b>Итого за 2 недели: {format_minutes(total_driving)} / 90ч</b>\n"
+
+    remaining_biweekly = max(0, 90 * 60 - total_driving)
+    if remaining_biweekly > 0:
+        text += f"⏳ Осталось: {format_minutes(remaining_biweekly)}\n"
+    else:
+        text += "🛑 Лимит 90ч исчерпан!\n"
+
+    conn.close()
+    return text
+
+
 # --- Callback Query Handlers ---
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -356,6 +475,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 keyboard = [
                     [InlineKeyboardButton("🟢 Открыть смену", callback_data="start_shift")],
                     [InlineKeyboardButton("📊 Статус", callback_data="show_status")],
+                    [InlineKeyboardButton("📓 Журнал (2 недели)", callback_data="show_journal")],
                     [InlineKeyboardButton("◀️ Меню", callback_data="main_menu")],
                 ]
                 await query.edit_message_text(
@@ -453,6 +573,12 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             text = _build_status_text(ec_rules)
             keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="rtio_menu")]]
             await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+        # === SHOW JOURNAL (2 weeks) ===
+        elif query.data == "show_journal":
+            text = _build_journal_text(user_id)
+            keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="rtio_menu")]]
+            await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
         # === FIND PARKING ===
         elif query.data == "find_parking":
