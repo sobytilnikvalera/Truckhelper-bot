@@ -13,7 +13,57 @@ async def main():
     
     # Register journal router
     dp.include_router(journal_router)
-    
+    def _build_journal_text(user_id):
+    """Журнал за 2 недели — четкая таблица."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    today = datetime.now(TZ).date()
+    text = "📓 <b>Журнал смен (2 недели)</b>\n\n"
+    text += "День      | Смена   | Отдых   | Вождение | 10-й час\n"
+    text += "────────────────────────────────────────────────\n"
+
+    week1_driving = 0.0
+    week2_driving = 0.0
+    current_week_start = today - timedelta(days=today.weekday())
+
+    for i in range(14):
+        day = today - timedelta(days=i)
+        day_str = day.isoformat()
+        day_name = DAY_NAMES_RU[day.weekday()]
+
+        cursor.execute("""
+            SELECT shift_duration, rest_hours, driving_hours, used_10th_hour 
+            FROM driver_shifts 
+            WHERE user_id = ? AND date = ?
+        """, (user_id, day_str))
+        row = cursor.fetchone()
+
+        if row:
+            s = row["shift_duration"] or 0
+            r = row["rest_hours"] or 0
+            d = row["driving_hours"] or 0
+            ten = "⚡" if row["used_10th_hour"] else ""
+            line = f"{day_name} {day.strftime('%d.%m')} | ⏰{s:.1f}ч | 🛏{r:.1f}ч | 🎯{d:.1f}ч | {ten}"
+        else:
+            line = f"{day_name} {day.strftime('%d.%m')} | —"
+
+        text += line + "\n"
+
+        # Итоги
+        if day >= current_week_start:
+            week2_driving += (row["driving_hours"] or 0) if row else 0
+        else:
+            week1_driving += (row["driving_hours"] or 0) if row else 0
+
+    total = week1_driving + week2_driving
+    text += "\n━━━━━━━━━━━━━━━\n"
+    text += f"<b>Неделя 1:</b> {week1_driving:.1f}ч вождения\n"
+    text += f"<b>Неделя 2:</b> {week2_driving:.1f}ч вождения\n"
+    text += f"<b>Всего 2 недели:</b> {total:.1f}ч / 90ч\n"
+
+    conn.close()
+    return text
     # Call init
     init_journal_db()
     
