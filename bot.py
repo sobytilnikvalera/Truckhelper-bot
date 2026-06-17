@@ -1,4 +1,3 @@
-
 # ====================== ЖУРНАЛ СМЕН ======================
 
 DAY_NAMES_RU = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
@@ -75,20 +74,3 @@ def add_shift_to_journal(user_id: int, shift_duration: float = 0, rest_hours: fl
     finally:
         if 'conn' in locals():
             conn.close()
-
-response = ec_rules.end_shift()
-                # === АВТОЗАПИСЬ В ЖУРНАЛ ===
-                try:
-                    shift_duration = 13.0
-                    if hasattr(ec_rules, 'get_current_shift_duration'):
-                        shift_duration = ec_rules.get_current_shift_duration() or 13.0
-                    
-                    driving_hours = getattr(ec_rules, 'daily_driving_minutes', 0) / 60.0
-                    rest_hours = max(0.0, shift_duration - driving_hours)
-                    used_10th_hour = driving_hours > 10.0
-                    
-                    add_shift_to_journal(user_id, shift_duration, rest_hours, driving_hours, used_10th_hour)
-                except Exception as journal_err:
-                    logger.error(f"Не удалось записать в журнал: {journal_err}")
-if __name__ == '__main__':
-    asyncio.run(main())
