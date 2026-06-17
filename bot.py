@@ -1,21 +1,9 @@
-from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command
-from aiogram import F
-import asyncio
-# ... existing imports ...
-# Для журнала
+
+# ====================== ЖУРНАЛ СМЕН ======================
+
 DAY_NAMES_RU = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 
-from database.journal import router as journal_router, init_journal_db
-
-# In your main setup
-async def main():
-    bot = Bot(token=TOKEN)
-    dp = Dispatcher()
-    
-    # Register journal router
-    dp.include_router(journal_router)
-    def _build_journal_text(user_id):
+def _build_journal_text(user_id):
     """Красивая таблица журнала за 2 недели"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -65,32 +53,8 @@ async def main():
 
     conn.close()
     return text
-    # Call init
-    init_journal_db()
-    
-    # existing code...
-    await dp.start_polling(bot)
-def add_shift_to_journal(user_id: int, shift_duration: float = 0, rest_hours: float = 0, driving_hours: float = 0, used_10th_hour: bool = False, notes: str = ""):
-    """Запись смены в журнал."""
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        date_str = datetime.now(TZ).date().isoformat()
-        
-        cursor.execute('''
-            INSERT OR REPLACE INTO driver_shifts 
-            (user_id, date, shift_duration, rest_hours, driving_hours, used_10th_hour, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (user_id, date_str, round(shift_duration, 2), round(rest_hours, 2), 
-              round(driving_hours, 2), 1 if used_10th_hour else 0, notes))
-        conn.commit()
-        logger.info(f"✅ Журнал обновлён для {user_id}: {driving_hours:.1f}ч вождения")
-    except Exception as e:
-        logger.error(f"Ошибка записи в журнал: {e}")
-    finally:
-        if 'conn' in locals():
-            conn.close()
-            
+
+
 def add_shift_to_journal(user_id: int, shift_duration: float = 0, rest_hours: float = 0, driving_hours: float = 0, used_10th_hour: bool = False, notes: str = ""):
     """Автоматическая запись смены в журнал"""
     try:
@@ -111,5 +75,20 @@ def add_shift_to_journal(user_id: int, shift_duration: float = 0, rest_hours: fl
     finally:
         if 'conn' in locals():
             conn.close()
+
+response = ec_rules.end_shift()
+                # === АВТОЗАПИСЬ В ЖУРНАЛ ===
+                try:
+                    shift_duration = 13.0
+                    if hasattr(ec_rules, 'get_current_shift_duration'):
+                        shift_duration = ec_rules.get_current_shift_duration() or 13.0
+                    
+                    driving_hours = getattr(ec_rules, 'daily_driving_minutes', 0) / 60.0
+                    rest_hours = max(0.0, shift_duration - driving_hours)
+                    used_10th_hour = driving_hours > 10.0
+                    
+                    add_shift_to_journal(user_id, shift_duration, rest_hours, driving_hours, used_10th_hour)
+                except Exception as journal_err:
+                    logger.error(f"Не удалось записать в журнал: {journal_err}")
 if __name__ == '__main__':
     asyncio.run(main())
