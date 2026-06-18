@@ -63,7 +63,7 @@ def add_shift_to_journal(user_id: int, shift_duration: float = 0, rest_hours: fl
         
         cursor.execute('''
             INSERT OR REPLACE INTO driver_shifts 
-            (user_id, date, shift_duration, rest_hours, driving_hours, used_10th_hour, notes)
+            (user_id, date, shift_duration, rest_hours, driving_hours, used_10th_hour, notes
             VALUES (?, ?, ?, ?, ?, ?, ?)
         ''', (user_id, date_str, round(shift_duration, 2), round(rest_hours, 2), 
               round(driving_hours, 2), 1 if used_10th_hour else 0, notes))
