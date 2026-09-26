@@ -608,6 +608,9 @@ def _search_driving_bans_tavily(country_name):
                 return {
                     "answer": answer or "В найденных материалах нет краткого вывода.",
                     "sources": sources,
+                    "evidence": "\n".join(
+                        [answer] + [result.get("content", "") for result in results[:5]]
+                    ),
                     "checked_at": checked_at,
                     "period_start": period_start,
                     "period_end": period_end,
@@ -616,6 +619,85 @@ def _search_driving_bans_tavily(country_name):
     except Exception as e:
         logger.warning(f"Tavily search failed: {e}")
         return None
+
+
+def _summarize_live_ban(live_info, country_name):
+    """Turn search evidence into a short, cautious Russian driver summary."""
+    evidence = live_info.get("evidence", "")
+    lowered = evidence.lower()
+    exact_date = re.search(
+        r"\b(?:20\d{2}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]20\d{2})\b",
+        evidence,
+    )
+    time_ranges = re.findall(r"\b\d{1,2}(?::|\.)\d{2}\s*(?:[-–—]|to|до)\s*\d{1,2}(?::|\.)\d{2}\b", evidence, re.I)
+    time_ranges = [re.sub(r"\s+to\s+", "–", value, flags=re.I).replace(" до ", "–") for value in time_ranges]
+
+    no_ban_markers = (
+        "no ban", "no driving ban", "no restrictions", "without restrictions",
+        "kein fahrverbot", "keine fahrverbote", "keine beschränkung",
+        "нет запрета", "запретов нет",
+    )
+    ban_markers = (
+        "driving ban", "truck ban", "traffic ban", "restriction applies",
+        "fahrverbot", "fahrverbote", "lastkraftwagen", "truck restriction",
+        "запрет движения", "ограничение движения",
+    )
+    has_no_ban = any(marker in lowered for marker in no_ban_markers)
+    has_ban = any(marker in lowered for marker in ban_markers)
+
+    if has_no_ban:
+        status = "✅ Запрета нет"
+    elif has_ban and not has_no_ban:
+        status = "⛔ Запрет есть"
+    else:
+        status = "ℹ️ Точный статус не найден"
+
+    text = f"{status}\n"
+    if status == "ℹ️ Точный статус не найден":
+        text += "В свежих источниках нет однозначного ответа на выбранные даты.\n"
+    else:
+        text += "Проверь детали ниже перед выездом.\n"
+
+    date_text = exact_date.group(0) if exact_date else ""
+    if date_text:
+        try:
+            date_text = datetime.strptime(date_text.replace("/", "-"), "%Y-%m-%d").strftime("%d.%m.%Y")
+        except ValueError:
+            try:
+                date_text = datetime.strptime(date_text.replace("/", "."), "%d.%m.%Y").strftime("%d.%m.%Y")
+            except ValueError:
+                pass
+    if exact_date or time_ranges:
+        text += "📅 Дата и время: "
+        if exact_date:
+            text += date_text
+        else:
+            text += "найдено в источнике"
+        if time_ranges:
+            text += ", " + ", ".join(time_ranges[:3])
+        text += "\n"
+    else:
+        text += "📅 Точная дата/время: не найдены\n"
+
+    weight_match = re.search(r"(?:>\s*|over\s*|above\s*|более\s*)(\d+(?:[.,]\d+)?)\s*t", evidence, re.I)
+    if weight_match:
+        vehicle_text = f"грузовики тяжелее {weight_match.group(1).replace(',', '.')} т"
+    elif re.search(r"all trucks|all lorries|alle lkw|все грузовики", lowered, re.I):
+        vehicle_text = "все грузовики"
+    else:
+        vehicle_text = "точный тип грузовика не найден"
+    text += f"🚛 Для кого: {vehicle_text}\n"
+
+    road_match = re.search(r"(?:motorway|highway|autobahn|route|трасс[а-я]*|дорог[а-я]*)\s+([A-ZА-Я0-9][^,.\n]{0,45})", evidence, re.I)
+    road_text = f"указанная трасса {road_match.group(1).strip()}" if road_match else "точные дороги не указаны"
+    text += f"🛣 Дороги: {road_text}\n"
+
+    fine_match = re.search(r"(?:fine|penalty|штраф)[^\d]{0,80}(\d[\d\s.,-]*(?:€|EUR|euro|\$|£|PLN|CZK|HUF))", evidence, re.I)
+    if fine_match:
+        text += f"💰 Штраф подтверждён источником: {fine_match.group(1).strip()}\n"
+    else:
+        text += "💰 Штраф: в найденном источнике не подтверждён\n"
+    return text
 
 
 def _get_driving_ban_info(country_code):
@@ -630,7 +712,7 @@ def _get_driving_ban_info(country_code):
     if live_info:
         text = f"{ban['country']}\n"
         text += f"━━━━━━━━━━━━━━━\n"
-        text += "🌐 Оперативная проверка запретов:\n"
+        text += "🔎 Проверка на ближайшие 4 дня\n"
         text += (
             f"📍 Регион: {ban['country']}\n"
             f"📅 Период: {live_info['period_start'].strftime('%d.%m.%Y')} — "
@@ -638,17 +720,17 @@ def _get_driving_ban_info(country_code):
             f"🕒 Проверено: {live_info['checked_at'].strftime('%d.%m.%Y %H:%M')} "
             f"({TZ.key})\n\n"
         )
-        text += f"{live_info['answer']}\n\n"
+        text += _summarize_live_ban(live_info, ban['country']) + "\n"
         if live_info["sources"]:
-            text += "🔗 Источники:\n"
+            text += "🔗 Источники для проверки:\n"
             for source in live_info["sources"]:
                 title = source["title"][:100]
                 published = source.get("published_date")
                 published_text = f" ({published})" if published else ""
-                text += f"• {title}{published_text}\n  {source['url']}\n"
+                text += f"• Открыть: {title}{published_text}\n  {source['url']}\n"
         text += (
-            "\n⚠️ Это результат свежего веб-поиска, а не юридическая гарантия. "
-            "Перед рейсом сверяй официальный источник страны и дорожные знаки.\n\n"
+            "\n⚠️ Данные получены из веб-источников. Перед рейсом проверь официальный сайт "
+            "и дорожные знаки.\n\n"
         )
         text += f"━━━━━━━━━━━━━━━\n"
         text += f"📌 Базовые правила:\n"
@@ -1107,7 +1189,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
         elif query.data.startswith("refresh_ban_"):
             country_code = query.data[len("refresh_ban_"):]
-            await query.edit_message_text(text="🔄 Проверяю актуальные запреты на ближайшие 4 дня...")
+            await query.edit_message_text(text="🔄 Обновляю данные о запретах...")
             text = _get_driving_ban_info(country_code)
             keyboard = [
                 [InlineKeyboardButton("🔄 Обновить", callback_data=f"refresh_ban_{country_code}")],
