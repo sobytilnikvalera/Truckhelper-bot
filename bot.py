@@ -624,7 +624,14 @@ def _search_driving_bans_tavily(country_name):
 def _summarize_live_ban(live_info, country_name):
     """Render only a cautious, four-day Russian table for a driver."""
     evidence = live_info.get("evidence", "")
-    weekdays = ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
+    weekdays = (
+        "понедельник", "вторник", "среда", "четверг",
+        "пятница", "суббота", "воскресенье",
+    )
+    months = (
+        "января", "февраля", "марта", "апреля", "мая", "июня",
+        "июля", "августа", "сентября", "октября", "ноября", "декабря",
+    )
     no_ban_markers = (
         "no ban", "no driving ban", "no restrictions", "without restrictions",
         "kein fahrverbot", "keine fahrverbote", "keine beschränkung",
@@ -671,17 +678,22 @@ def _summarize_live_ban(live_info, country_name):
         )
         if time_match:
             hours = re.sub(r"\s+to\s+", "–", time_match.group(0), flags=re.I).replace(" до ", "–")
-            return f"ДА, {hours}"
-        return "ДА, есть ограничение"
+            return f"запрет с {hours.replace('–', ' до ')}"
+        return "Нет точных данных"
 
     text = f"{country_name}\n"
     if weight_text:
         text += f"{weight_text}\n"
-    text += "\nДата | День | Запрет\n"
-    text += "──────────────\n"
+    text += "\n"
     for offset in range(4):
         day = live_info["period_start"] + timedelta(days=offset)
-        text += f"{day.strftime('%d.%m')} | {weekdays[day.weekday()]} | {status_for_day(day)}\n"
+        date_text = f"{day.day} {months[day.month - 1]}"
+        status = status_for_day(day)
+        if status == "Нет":
+            status = "запрета нет"
+        elif status == "Нет точных данных":
+            status = "Нет точных данных"
+        text += f"{date_text} — {weekdays[day.weekday()]} — {status}\n"
     return text
 
 
