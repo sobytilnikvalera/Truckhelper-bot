@@ -557,19 +557,28 @@ DRIVING_BANS = {
 
 
 def _search_driving_bans_tavily(country_name):
-    """Search for current driving bans using Tavily API."""
+    """Search current truck bans for today and the next three calendar days."""
     if not TAVILY_API_KEY:
         return None
     try:
-        today = datetime.now(TZ).strftime('%Y-%m-%d')
-        query = f"запрет движения грузовиков {country_name} {today} выходные праздники"
+        checked_at = datetime.now(TZ)
+        period_start = checked_at.date()
+        period_end = period_start + timedelta(days=3)
+        start_iso = period_start.isoformat()
+        end_iso = period_end.isoformat()
+        query = (
+            f"truck driving bans and traffic restrictions in {country_name} "
+            f"from {start_iso} through {end_iso}; "
+            "official calendar, weekends, public holidays, current updates; "
+            "list exact dates and time windows, or say when no date-specific rule is found"
+        )
         response = requests.post(
             "https://api.tavily.com/search",
             json={
                 "api_key": TAVILY_API_KEY,
                 "query": query,
-                "search_depth": "basic",
-                "max_results": 3,
+                "search_depth": "advanced",
+                "max_results": 5,
                 "include_answer": True,
             },
             timeout=10
@@ -577,18 +586,32 @@ def _search_driving_bans_tavily(country_name):
         if response.status_code == 200:
             data = response.json()
             answer = data.get("answer", "")
-            if answer:
-                return answer
-            # Fallback to results snippets
             results = data.get("results", [])
-            if results:
+            if not answer and results:
                 snippets = []
-                for r in results[:3]:
-                    snippet = r.get("content", "")[:200]
+                for result in results[:5]:
+                    snippet = result.get("content", "").strip()
                     if snippet:
-                        snippets.append(snippet)
-                if snippets:
-                    return "\n\n".join(snippets)
+                        snippets.append(snippet[:500])
+                answer = "\n\n".join(snippets)
+            if answer or results:
+                sources = []
+                for result in results[:5]:
+                    url = result.get("url")
+                    if not url:
+                        continue
+                    sources.append({
+                        "title": (result.get("title") or url).strip(),
+                        "url": url,
+                        "published_date": result.get("published_date"),
+                    })
+                return {
+                    "answer": answer or "В найденных материалах нет краткого вывода.",
+                    "sources": sources,
+                    "checked_at": checked_at,
+                    "period_start": period_start,
+                    "period_end": period_end,
+                }
         return None
     except Exception as e:
         logger.warning(f"Tavily search failed: {e}")
@@ -607,8 +630,26 @@ def _get_driving_ban_info(country_code):
     if live_info:
         text = f"{ban['country']}\n"
         text += f"━━━━━━━━━━━━━━━\n"
-        text += f"🌐 Актуальная информация:\n\n"
-        text += f"{live_info}\n\n"
+        text += "🌐 Оперативная проверка запретов:\n"
+        text += (
+            f"📍 Регион: {ban['country']}\n"
+            f"📅 Период: {live_info['period_start'].strftime('%d.%m.%Y')} — "
+            f"{live_info['period_end'].strftime('%d.%m.%Y')}\n"
+            f"🕒 Проверено: {live_info['checked_at'].strftime('%d.%m.%Y %H:%M')} "
+            f"({TZ.key})\n\n"
+        )
+        text += f"{live_info['answer']}\n\n"
+        if live_info["sources"]:
+            text += "🔗 Источники:\n"
+            for source in live_info["sources"]:
+                title = source["title"][:100]
+                published = source.get("published_date")
+                published_text = f" ({published})" if published else ""
+                text += f"• {title}{published_text}\n  {source['url']}\n"
+        text += (
+            "\n⚠️ Это результат свежего веб-поиска, а не юридическая гарантия. "
+            "Перед рейсом сверяй официальный источник страны и дорожные знаки.\n\n"
+        )
         text += f"━━━━━━━━━━━━━━━\n"
         text += f"📌 Базовые правила:\n"
         text += f"🚛 Применяется к: {ban['applies_to']}\n"
@@ -1064,10 +1105,22 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 text="🚫 Запреты движения грузовиков (>7.5т)\n\nВыбери страну:",
                 reply_markup=InlineKeyboardMarkup(keyboard))
 
+        elif query.data.startswith("refresh_ban_"):
+            country_code = query.data[len("refresh_ban_"):]
+            await query.edit_message_text(text="🔄 Проверяю актуальные запреты на ближайшие 4 дня...")
+            text = _get_driving_ban_info(country_code)
+            keyboard = [
+                [InlineKeyboardButton("🔄 Обновить", callback_data=f"refresh_ban_{country_code}")],
+                [InlineKeyboardButton("◀️ Назад к странам", callback_data="driving_bans")],
+                [InlineKeyboardButton("◀️ Меню", callback_data="main_menu")],
+            ]
+            await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(keyboard))
+
         elif query.data.startswith("ban_"):
             country_code = query.data[4:]
             text = _get_driving_ban_info(country_code)
             keyboard = [
+                [InlineKeyboardButton("🔄 Обновить", callback_data=f"refresh_ban_{country_code}")],
                 [InlineKeyboardButton("◀️ Назад к странам", callback_data="driving_bans")],
                 [InlineKeyboardButton("◀️ Меню", callback_data="main_menu")],
             ]
