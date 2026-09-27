@@ -697,7 +697,7 @@ def _summarize_germany_ban(live_info):
         if not context:
             return "Нет точных данных"
         if any(marker in context for marker in no_ban_markers):
-            return "запрета нет"
+            return "запрета нет\nМожешь гнать, только помни: тормозить надо ногами, а не головой"
         if not any(marker in context for marker in ban_markers):
             return "Нет точных данных"
         time_match = re.search(
@@ -791,7 +791,7 @@ def _summarize_live_ban(live_info, country_name):
         date_text = f"{day.day} {months[day.month - 1]} {day.year} года"
         status = status_for_day(day)
         if status == "Нет":
-            status = "запрета нет"
+            status = "запрета нет\nМожешь гнать, только помни: тормозить надо ногами, а не головой"
         elif status == "Нет точных данных":
             status = "Нет точных данных"
         text += f"{date_text} — {weekdays[day.weekday()]} — {status}\n"
