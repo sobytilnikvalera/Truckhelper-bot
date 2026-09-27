@@ -621,6 +621,107 @@ def _search_driving_bans_tavily(country_name):
         return None
 
 
+def _easter_sunday(year):
+    """Return Easter Sunday for the Gregorian calendar."""
+    a = year % 19
+    b = year // 100
+    c = year % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day = ((h + l - 7 * m + 114) % 31) + 1
+    return datetime(year, month, day).date()
+
+
+def _german_public_holidays(year):
+    """Nationwide German public holidays; state-specific holidays need a region."""
+    easter = _easter_sunday(year)
+    return {
+        datetime(year, 1, 1).date(),
+        easter - timedelta(days=2),
+        easter + timedelta(days=1),
+        datetime(year, 5, 1).date(),
+        easter + timedelta(days=39),
+        easter + timedelta(days=50),
+        datetime(year, 10, 3).date(),
+        datetime(year, 12, 25).date(),
+        datetime(year, 12, 26).date(),
+    }
+
+
+def _russian_full_date(day):
+    weekdays = (
+        "понедельник", "вторник", "среда", "четверг",
+        "пятница", "суббота", "воскресенье",
+    )
+    months = (
+        "января", "февраля", "марта", "апреля", "мая", "июня",
+        "июля", "августа", "сентября", "октября", "ноября", "декабря",
+    )
+    return f"{day.day} {months[day.month - 1]} {day.year} года — {weekdays[day.weekday()]}"
+
+
+def _summarize_germany_ban(live_info):
+    """Render Germany's confirmed base rule first, using web data only for other days."""
+    live_info = live_info or {}
+    evidence = live_info.get("evidence", "")
+    period_start = live_info.get("period_start", datetime.now(TZ).date())
+    sentences = re.split(r"(?<=[.!?])\s+", evidence)
+    no_ban_markers = (
+        "no ban", "no driving ban", "no restrictions", "without restrictions",
+        "kein fahrverbot", "keine fahrverbote", "keine beschränkung",
+        "нет запрета", "запретов нет",
+    )
+    ban_markers = (
+        "driving ban", "truck ban", "traffic ban", "restriction applies",
+        "fahrverbot", "fahrverbote", "lastkraftwagen", "truck restriction",
+        "запрет движения", "ограничение движения",
+    )
+
+    def live_status(day):
+        tokens = (
+            day.strftime("%Y-%m-%d"), day.strftime("%d.%m.%Y"),
+            day.strftime("%-d.%-m.%Y"), day.strftime("%d/%m/%Y"),
+        )
+        context = " ".join(
+            sentence for sentence in sentences
+            if any(re.search(re.escape(token), sentence) for token in tokens)
+        ).lower()
+        if not context:
+            return "Нет точных данных"
+        if any(marker in context for marker in no_ban_markers):
+            return "запрета нет"
+        if not any(marker in context for marker in ban_markers):
+            return "Нет точных данных"
+        time_match = re.search(
+            r"\b\d{1,2}(?::|\.)\d{2}\s*(?:[-–—]|to|до)\s*\d{1,2}(?::|\.)\d{2}\b",
+            context, re.I,
+        )
+        if not time_match:
+            return "Нет точных данных"
+        hours = re.sub(r"\s+to\s+", " до ", time_match.group(0), flags=re.I)
+        hours = hours.replace("–", " до ").replace("—", " до ")
+        return f"запрет {hours}"
+
+    text = "🇩🇪 Германия\nДля грузовиков тяжелее 7,5 т и грузовиков с прицепом\n\n"
+    holidays = _german_public_holidays(period_start.year)
+    for offset in range(4):
+        day = period_start + timedelta(days=offset)
+        if day.weekday() == 6 or day in holidays:
+            status = "запрет 00:00–22:00 (есть исключения)"
+        else:
+            status = live_status(day)
+        text += f"{_russian_full_date(day)} — {status}\n"
+    return text
+
+
 def _summarize_live_ban(live_info, country_name):
     """Render only a cautious, four-day Russian table for a driver."""
     evidence = live_info.get("evidence", "")
@@ -687,7 +788,7 @@ def _summarize_live_ban(live_info, country_name):
     text += "\n"
     for offset in range(4):
         day = live_info["period_start"] + timedelta(days=offset)
-        date_text = f"{day.day} {months[day.month - 1]}"
+        date_text = f"{day.day} {months[day.month - 1]} {day.year} года"
         status = status_for_day(day)
         if status == "Нет":
             status = "запрета нет"
@@ -702,7 +803,11 @@ def _get_driving_ban_info(country_code):
     ban = DRIVING_BANS.get(country_code)
     if not ban:
         return "Информация не найдена."
-
+    if country_code == "de":
+        # Germany's nationwide Sunday/holiday rule is deterministic and must
+        # remain visible even when Tavily is unavailable or inconclusive.
+        live_info = _search_driving_bans_tavily(ban['country'])
+        return _summarize_germany_ban(live_info)
     # Try to get live data from Tavily
     live_info = _search_driving_bans_tavily(ban['country'])
 
