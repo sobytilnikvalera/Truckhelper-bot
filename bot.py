@@ -608,6 +608,11 @@ def _search_driving_bans_tavily(country_name):
                 return {
                     "answer": answer or "В найденных материалах нет краткого вывода.",
                     "sources": sources,
+                    "evidence_items": [
+                        result.get("content", "").strip()
+                        for result in results[:5]
+                        if result.get("content", "").strip()
+                    ],
                     "evidence": "\n".join(
                         [answer] + [result.get("content", "") for result in results[:5]]
                     ),
@@ -668,12 +673,24 @@ def _russian_full_date(day):
     return f"{day.day} {months[day.month - 1]} {day.year} года — {weekdays[day.weekday()]}"
 
 
-def _summarize_germany_ban(live_info):
-    """Render Germany's confirmed base rule first, using web data only for other days."""
-    live_info = live_info or {}
-    evidence = live_info.get("evidence", "")
-    period_start = live_info.get("period_start", datetime.now(TZ).date())
-    sentences = re.split(r"(?<=[.!?])\s+", evidence)
+def _summarize_germany_ban(live_info=None):
+    """Render only Germany's deterministic, confirmed nationwide bans."""
+    period_start = (live_info or {}).get("period_start", datetime.now(TZ).date())
+    holidays = _german_public_holidays(period_start.year)
+    rows = []
+    for offset in range(4):
+        day = period_start + timedelta(days=offset)
+        if day.weekday() == 6 or day in holidays:
+            rows.append(
+                f"⛔ {_russian_full_date(day)} — запрет 00:00–22:00 (есть исключения)"
+            )
+    text = "🇩🇪 Германия\nДля грузовиков тяжелее 7,5 т и грузовиков с прицепом\n\n"
+    return text + ("\n".join(rows) if rows else "На ближайшие 4 дня подтверждённых запретов для списка нет.")
+
+
+def _summarize_live_ban(live_info, country_name):
+    """Render only date- and time-specific positive evidence; never render a no-ban status."""
+    evidence_items = live_info.get("evidence_items") or []
     no_ban_markers = (
         "no ban", "no driving ban", "no restrictions", "without restrictions",
         "kein fahrverbot", "keine fahrverbote", "keine beschränkung",
@@ -681,121 +698,39 @@ def _summarize_germany_ban(live_info):
     )
     ban_markers = (
         "driving ban", "truck ban", "traffic ban", "restriction applies",
-        "fahrverbot", "fahrverbote", "lastkraftwagen", "truck restriction",
+        "fahrverbot", "fahrverbote", "truck restriction",
         "запрет движения", "ограничение движения",
     )
-
-    def live_status(day):
+    period_start = live_info["period_start"]
+    rows = []
+    for offset in range(4):
+        day = period_start + timedelta(days=offset)
         tokens = (
             day.strftime("%Y-%m-%d"), day.strftime("%d.%m.%Y"),
             day.strftime("%-d.%-m.%Y"), day.strftime("%d/%m/%Y"),
         )
-        context = " ".join(
-            sentence for sentence in sentences
-            if any(re.search(re.escape(token), sentence) for token in tokens)
-        ).lower()
-        if not context:
-            return "Нет точных данных"
-        if any(marker in context for marker in no_ban_markers):
-            return "запрета нет\nМожешь гнать, только помни: тормозить надо ногами, а не головой"
-        if not any(marker in context for marker in ban_markers):
-            return "Нет точных данных"
-        time_match = re.search(
-            r"\b\d{1,2}(?::|\.)\d{2}\s*(?:[-–—]|to|до)\s*\d{1,2}(?::|\.)\d{2}\b",
-            context, re.I,
-        )
-        if not time_match:
-            return "Нет точных данных"
-        hours = re.sub(r"\s+to\s+", " до ", time_match.group(0), flags=re.I)
-        hours = hours.replace("–", " до ").replace("—", " до ")
-        return f"запрет {hours}"
-
-    text = "🇩🇪 Германия\nДля грузовиков тяжелее 7,5 т и грузовиков с прицепом\n\n"
-    holidays = _german_public_holidays(period_start.year)
-    for offset in range(4):
-        day = period_start + timedelta(days=offset)
-        if day.weekday() == 6 or day in holidays:
-            status = "запрет 00:00–22:00 (есть исключения)"
-        else:
-            status = live_status(day)
-        text += f"{_russian_full_date(day)} — {status}\n"
-    return text
-
-
-def _summarize_live_ban(live_info, country_name):
-    """Render only a cautious, four-day Russian table for a driver."""
-    evidence = live_info.get("evidence", "")
-    weekdays = (
-        "понедельник", "вторник", "среда", "четверг",
-        "пятница", "суббота", "воскресенье",
-    )
-    months = (
-        "января", "февраля", "марта", "апреля", "мая", "июня",
-        "июля", "августа", "сентября", "октября", "ноября", "декабря",
-    )
-    no_ban_markers = (
-        "no ban", "no driving ban", "no restrictions", "without restrictions",
-        "kein fahrverbot", "keine fahrverbote", "keine beschränkung",
-        "нет запрета", "запретов нет",
-    )
-    ban_markers = (
-        "driving ban", "truck ban", "traffic ban", "restriction applies",
-        "fahrverbot", "fahrverbote", "lastkraftwagen", "truck restriction",
-        "запрет движения", "ограничение движения",
-    )
-    weight_match = re.search(r"(?:>\s*|over\s*|above\s*|более\s*)(\d+(?:[.,]\d+)?)\s*t", evidence, re.I)
-    weight_text = (
-        f"Для грузовиков тяжелее {weight_match.group(1).replace(',', '.')} т"
-        if weight_match else ""
-    )
-
-    def date_tokens(day):
-        return (
-            day.strftime("%Y-%m-%d"),
-            day.strftime("%d.%m.%Y"),
-            day.strftime("%-d.%-m.%Y"),
-            day.strftime("%d/%m/%Y"),
-        )
-
-    def status_for_day(day):
-        context_parts = []
-        sentences = re.split(r"(?<=[.!?])\s+", evidence)
-        for token in date_tokens(day):
-            context_parts.extend(
-                sentence for sentence in sentences if re.search(re.escape(token), sentence)
-            )
-        context = " ".join(context_parts).lower()
-        if not context:
-            return "Нет точных данных"
-        has_no_ban = any(marker in context for marker in no_ban_markers)
-        has_ban = any(marker in context for marker in ban_markers)
-        if has_no_ban:
-            return "Нет"
-        if not has_ban:
-            return "Нет точных данных"
-        time_match = re.search(
-            r"\b\d{1,2}(?::|\.)\d{2}\s*(?:[-–—]|to|до)\s*\d{1,2}(?::|\.)\d{2}\b",
-            context, re.I,
-        )
-        if time_match:
-            hours = re.sub(r"\s+to\s+", "–", time_match.group(0), flags=re.I).replace(" до ", "–")
-            return f"запрет с {hours.replace('–', ' до ')}"
-        return "Нет точных данных"
-
+        for item in evidence_items:
+            for sentence in re.split(r"(?<=[.!?])\s+", item):
+                lowered = sentence.lower()
+                if not any(token in sentence for token in tokens):
+                    continue
+                if any(marker in lowered for marker in no_ban_markers):
+                    continue
+                if not any(marker in lowered for marker in ban_markers):
+                    continue
+                time_match = re.search(
+                    r"\b\d{1,2}(?::|\.)\d{2}\s*(?:[-–—]|to|до)\s*\d{1,2}(?::|\.)\d{2}\b",
+                    sentence, re.I,
+                )
+                if not time_match:
+                    continue
+                hours = re.sub(r"\s+to\s+", "–", time_match.group(0), flags=re.I).replace(" до ", "–")
+                row = f"⛔ {day.strftime('%d.%m.%Y')} — запрет {hours.replace('–', ' до ')}"
+                if row not in rows:
+                    rows.append(row)
+                break
     text = f"{country_name}\n"
-    if weight_text:
-        text += f"{weight_text}\n"
-    text += "\n"
-    for offset in range(4):
-        day = live_info["period_start"] + timedelta(days=offset)
-        date_text = f"{day.day} {months[day.month - 1]} {day.year} года"
-        status = status_for_day(day)
-        if status == "Нет":
-            status = "запрета нет\nМожешь гнать, только помни: тормозить надо ногами, а не головой"
-        elif status == "Нет точных данных":
-            status = "Нет точных данных"
-        text += f"{date_text} — {weekdays[day.weekday()]} — {status}\n"
-    return text
+    return text + ("\n".join(rows) if rows else "На ближайшие 4 дня подтверждённых запретов не найдено.")
 
 
 def _get_driving_ban_info(country_code):
@@ -804,10 +739,9 @@ def _get_driving_ban_info(country_code):
     if not ban:
         return "Информация не найдена."
     if country_code == "de":
-        # Germany's nationwide Sunday/holiday rule is deterministic and must
-        # remain visible even when Tavily is unavailable or inconclusive.
-        live_info = _search_driving_bans_tavily(ban['country'])
-        return _summarize_germany_ban(live_info)
+        # Germany's nationwide Sunday/holiday rule is deterministic; Tavily
+        # must not replace it with an inconclusive result.
+        return _summarize_germany_ban()
     # Try to get live data from Tavily
     live_info = _search_driving_bans_tavily(ban['country'])
 
@@ -815,10 +749,33 @@ def _get_driving_ban_info(country_code):
         checked_at = datetime.now(TZ)
         live_info = {
             "evidence": "",
+            "evidence_items": [],
             "period_start": checked_at.date(),
             "period_end": checked_at.date() + timedelta(days=3),
         }
     return _summarize_live_ban(live_info, ban['country'])
+
+
+def _build_confirmed_ban_list():
+    """Build a result list, not a country catalogue: only confirmed bans are shown."""
+    period_start = datetime.now(TZ).date()
+    holidays = _german_public_holidays(period_start.year)
+    rows = []
+    for offset in range(4):
+        day = period_start + timedelta(days=offset)
+        if day.weekday() == 6 or day in holidays:
+            rows.append(
+                f"⛔ Германия — {_russian_full_date(day)} — 00:00–22:00"
+            )
+    text = "🚫 Подтверждённые запреты на ближайшие 4 дня\n\n"
+    text += "\n".join(rows)
+    if not rows:
+        text += "Подтверждённых запретов для списка нет."
+    text += (
+        "\n\nОстальные страны не включены в результат без надёжного календаря "
+        "с датой и временем запрета."
+    )
+    return text
 
 
 # --- Fines Reference Data ---
@@ -1242,20 +1199,22 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         # === DRIVING BANS ===
         elif query.data == "driving_bans":
             keyboard = [
-                [InlineKeyboardButton("🇩🇪 Германия", callback_data="ban_de")],
-                [InlineKeyboardButton("🇵🇱 Польша", callback_data="ban_pl")],
-                [InlineKeyboardButton("🇫🇷 Франция", callback_data="ban_fr")],
-                [InlineKeyboardButton("🇦🇹 Австрия", callback_data="ban_at")],
-                [InlineKeyboardButton("🇨🇿 Чехия", callback_data="ban_cz")],
-                [InlineKeyboardButton("🇮🇹 Италия", callback_data="ban_it")],
-                [InlineKeyboardButton("🇪🇸 Испания", callback_data="ban_es")],
-                [InlineKeyboardButton("🇧🇪 Бельгия", callback_data="ban_be")],
-                [InlineKeyboardButton("🇭🇺 Венгрия", callback_data="ban_hu")],
-                [InlineKeyboardButton("🇳🇱 Нидерланды", callback_data="ban_nl")],
+                [InlineKeyboardButton("Проверить Германию", callback_data="ban_de")],
+                [InlineKeyboardButton("Проверить другую страну", callback_data="ban_country_menu")],
                 [InlineKeyboardButton("◀️ Меню", callback_data="main_menu")],
             ]
             await query.edit_message_text(
-                text="🚫 Запреты\n\nВыбери страну:",
+                text=_build_confirmed_ban_list(),
+                reply_markup=InlineKeyboardMarkup(keyboard))
+
+        elif query.data == "ban_country_menu":
+            keyboard = [
+                [InlineKeyboardButton(DRIVING_BANS[code]["country"], callback_data=f"ban_{code}")]
+                for code in DRIVING_BANS
+            ]
+            keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="driving_bans")])
+            await query.edit_message_text(
+                text="Проверка отдельной страны (в результат попадут только дата и время, подтверждённые источником):",
                 reply_markup=InlineKeyboardMarkup(keyboard))
 
         elif query.data.startswith("refresh_ban_"):
